@@ -1,4 +1,3 @@
-// main.go
 package main
 
 import (
@@ -57,7 +56,6 @@ func main() {
 		cfg.SMTPPassword,
 		cfg.SMTPFrom,
 	)
-
 	authService := services.NewAuthService(db, emailService)
 
 	// Start gRPC server
@@ -100,6 +98,7 @@ func runGraphQLServer(port string, authService *services.AuthService) {
 	srv := handler.NewDefaultServer(schema.NewExecutableSchema(schema.Config{
 		Resolvers: resolver,
 	}))
+
 	// Setup routes
 	mux := http.NewServeMux()
 

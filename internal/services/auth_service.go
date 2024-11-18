@@ -19,6 +19,7 @@ import (
 
 	"github.com/vasuahex/go-lang/internal/models"
 	pb "github.com/vasuahex/go-lang/proto/auth"
+
 )
 
 type AuthService struct {
@@ -101,7 +102,7 @@ func (s *AuthService) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 	var existingUser models.User
 	err := s.userCollection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&existingUser)
 	if err == nil {
-		return nil, status.Error(codes.AlreadyExists, "email already registered")
+		return nil, status.Error(codes.AlreadyExists, "email already reg istered")
 	} else if err != mongo.ErrNoDocuments {
 		return nil, status.Error(codes.Internal, "database error")
 	}
