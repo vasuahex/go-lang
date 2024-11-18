@@ -1,0 +1,42 @@
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  mobileNumber: String
+  gender: String
+  dateOfBirth: String
+  image: String
+  isVerified: Boolean!
+  isAdmin: Boolean!
+  cart: [ID!]
+  addresses: [ID!]
+  isBlocked: Boolean!
+}
+
+type AuthResponse {
+  message: String!
+  token: String
+  user: User
+}
+
+input RegisterInput {
+  name: String!
+  email: String!
+  password: String!
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+}
+
+type Query {
+  me: User
+  users: [User!]!
+}
+
+type Mutation {
+  register(input: RegisterInput!): AuthResponse!
+  login(input: LoginInput!): AuthResponse!
+  verifyEmail(token: String!): AuthResponse!
+}
