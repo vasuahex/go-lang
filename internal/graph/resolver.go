@@ -1,11 +1,13 @@
 package graph
 
 import (
-	pb "/GO-server/proto/auth"
 	"context"
 	"fmt"
 	"net/http"
 	"strings"
+
+	pb "github.com/vasuahex/go-lang/proto/auth"
+
 )
 
 // Resolver serves as a dependency injection container for your GraphQL resolvers

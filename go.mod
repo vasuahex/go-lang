@@ -1,4 +1,5 @@
-module example.com/m
+module github.com/vasuahex/go-lang
+
 
 go 1.23.3
 

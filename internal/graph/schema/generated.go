@@ -3,8 +3,6 @@
 package schema
 
 import (
-	"GO-server/internal/graph/models"
-	models1 "GO-server/internal/models"
 	"bytes"
 	"context"
 	"embed"
@@ -18,6 +16,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/introspection"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+
+	"github.com/vasuahex/go-lang/internal/graph/models"
+	models1 "github.com/vasuahex/go-lang/internal/models"
 )
 
 // region    ************************** generated!.gotpl **************************

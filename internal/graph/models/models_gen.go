@@ -3,7 +3,7 @@
 package models
 
 import (
-	"/GO-server/internal/models"
+	"github.com/vasuahex/go-lang/internal/models"
 )
 
 type AuthResponse struct {
