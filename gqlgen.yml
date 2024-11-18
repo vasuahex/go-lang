@@ -10,4 +10,3 @@ resolver:
   layout: follow-schema
   dir: internal/graph/schema
   package: schema
-  filename_template: "{name}.resolvers.go"
