@@ -19,9 +19,10 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/vasuahex/go-lang/internal/config"
-	"github.com/vasuahex/go-lang/internal/graph"
+	"github.com/vasuahex/go-lang/internal/graph/schema"
 	"github.com/vasuahex/go-lang/internal/services"
 	pb "github.com/vasuahex/go-lang/proto/auth"
+
 )
 
 func main() {
@@ -93,15 +94,12 @@ func runGRPCServer(port string, authService *services.AuthService) {
 
 func runGraphQLServer(port string, authService *services.AuthService) {
 	// Initialize GraphQL resolver
-	resolver := &graph.Resolver{
-		AuthService: authService,
-	}
+	resolver := schema.NewResolver(authService)
 
 	// Create GraphQL server
-	srv := handler.NewDefaultServer(graph.NewExecutableSchema(graph.Config{
+	srv := handler.NewDefaultServer(schema.NewExecutableSchema(schema.Config{
 		Resolvers: resolver,
 	}))
-
 	// Setup routes
 	mux := http.NewServeMux()
 
@@ -109,7 +107,7 @@ func runGraphQLServer(port string, authService *services.AuthService) {
 	mux.Handle("/", playground.Handler("GraphQL playground", "/query"))
 
 	// Add GraphQL endpoint with authentication middleware
-	mux.Handle("/query", graph.AuthMiddleware(srv))
+	mux.Handle("/query", srv)
 
 	// Configure server
 	server := &http.Server{

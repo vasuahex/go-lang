@@ -2,29 +2,5 @@
 
 package models
 
-import (
-	"github.com/vasuahex/go-lang/internal/models"
-)
-
-type AuthResponse struct {
-	Message string       `json:"message"`
-	Token   *string      `json:"token,omitempty"`
-	User    *models.User `json:"user,omitempty"`
-}
-
-type LoginInput struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type Mutation struct {
-}
-
 type Query struct {
-}
-
-type RegisterInput struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
 }
