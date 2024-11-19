@@ -22,7 +22,7 @@ import (
 	"github.com/vasuahex/go-lang/internal/services"
 	pb "github.com/vasuahex/go-lang/proto/auth"
 
-)
+
 
 func main() {
 	// Load configuration
@@ -105,7 +105,7 @@ func runGraphQLServer(port string, authService *services.AuthService) {
 	// Add GraphQL playground
 	mux.Handle("/", playground.Handler("GraphQL playground", "/query"))
 
-	// Add GraphQL endpoint with authentication middleware
+	// Add GraphQL endpoint
 	mux.Handle("/query", srv)
 
 	// Configure server

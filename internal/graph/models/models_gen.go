@@ -2,5 +2,40 @@
 
 package models
 
+type AuthResponse struct {
+	Message string  `json:"message"`
+	Token   *string `json:"token,omitempty"`
+	User    *User   `json:"user,omitempty"`
+}
+
+type LoginInput struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type Mutation struct {
+}
+
 type Query struct {
+}
+
+type RegisterInput struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type User struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Email        string   `json:"email"`
+	MobileNumber *string  `json:"mobileNumber,omitempty"`
+	Gender       *string  `json:"gender,omitempty"`
+	DateOfBirth  *string  `json:"dateOfBirth,omitempty"`
+	Image        *string  `json:"image,omitempty"`
+	IsVerified   bool     `json:"isVerified"`
+	IsAdmin      bool     `json:"isAdmin"`
+	Cart         []string `json:"cart,omitempty"`
+	Addresses    []string `json:"addresses,omitempty"`
+	IsBlocked    bool     `json:"isBlocked"`
 }

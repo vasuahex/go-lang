@@ -1,12 +1,23 @@
+# Schema files location
 schema:
-  - internal/graph/schema/*.graphqls
+  - internal/graph/schema/*.graphql
+
+# Generated executable schema
 exec:
   filename: internal/graph/schema/generated.go
   package: schema
+
+# Generated models
 model:
   filename: internal/graph/models/models_gen.go
   package: models
+
+# Resolver configuration
 resolver:
   layout: follow-schema
   dir: internal/graph/schema
   package: schema
+  filename: internal/graph/schema/resolver.go
+
+# Optional: Struct field tags
+struct_tag: json
