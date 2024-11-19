@@ -21,8 +21,7 @@ import (
 	"github.com/vasuahex/go-lang/internal/graph/schema"
 	"github.com/vasuahex/go-lang/internal/services"
 	pb "github.com/vasuahex/go-lang/proto/auth"
-
-
+)
 
 func main() {
 	// Load configuration

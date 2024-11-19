@@ -1,6 +1,6 @@
 # Schema files location
 schema:
-  - internal/graph/schema/*.graphql
+  - internal/graph/schema/*.graphqls
 
 # Generated executable schema
 exec:
