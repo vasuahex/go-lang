@@ -1,3 +1,5 @@
+// internal/graph/schema/resolvers.go
+
 package schema
 
 import (
@@ -6,34 +8,17 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/vasuahex/go-lang/internal/models"
+	"github.com/vasuahex/go-lang/internal/graph/models"
 	"github.com/vasuahex/go-lang/internal/services"
 	pb "github.com/vasuahex/go-lang/proto/auth"
 )
 
-// Input types
-type RegisterInput struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type LoginInput struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type AuthResponse struct {
-	Message string       `json:"message"`
-	Token   string       `json:"token"`
-	User    *models.User `json:"user"`
-}
-
-// Resolver struct holds dependencies
+// Resolver struct that holds your services
 type Resolver struct {
 	AuthService *services.AuthService
 }
 
+// NewResolver creates a new resolver instance
 func NewResolver(authService *services.AuthService) *Resolver {
 	return &Resolver{
 		AuthService: authService,
@@ -41,7 +26,15 @@ func NewResolver(authService *services.AuthService) *Resolver {
 }
 
 // Query resolvers
-func (r *Resolver) Me(ctx context.Context) (*models.User, error) {
+type queryResolver struct {
+	*Resolver
+}
+
+func (r *Resolver) Query() QueryResolver {
+	return &queryResolver{r}
+}
+
+func (r *queryResolver) Me(ctx context.Context) (*models.User, error) {
 	userID, err := getUserIDFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -55,10 +48,10 @@ func (r *Resolver) Me(ctx context.Context) (*models.User, error) {
 	return convertProtoToGraphQLUser(user), nil
 }
 
-func (r *Resolver) Users(ctx context.Context) ([]*models.User, error) {
-	if !isAdmin(ctx) {
-		return nil, errors.New("unauthorized: admin access required")
-	}
+func (r *queryResolver) Users(ctx context.Context) ([]*models.User, error) {
+	// if !isAdmin(ctx) {
+	// 	return nil, errors.New("unauthorized: admin access required")
+	// }
 
 	users, err := r.AuthService.GetUsers(ctx)
 	if err != nil {
@@ -69,7 +62,15 @@ func (r *Resolver) Users(ctx context.Context) ([]*models.User, error) {
 }
 
 // Mutation resolvers
-func (r *Resolver) Register(ctx context.Context, input RegisterInput) (*AuthResponse, error) {
+type mutationResolver struct {
+	*Resolver
+}
+
+func (r *Resolver) Mutation() MutationResolver {
+	return &mutationResolver{r}
+}
+
+func (r *mutationResolver) Register(ctx context.Context, input models.RegisterInput) (*models.AuthResponse, error) {
 	req := &pb.RegisterRequest{
 		Name:     input.Name,
 		Email:    input.Email,
@@ -84,7 +85,7 @@ func (r *Resolver) Register(ctx context.Context, input RegisterInput) (*AuthResp
 	return convertProtoToGraphQLAuthResponse(resp), nil
 }
 
-func (r *Resolver) Login(ctx context.Context, input LoginInput) (*AuthResponse, error) {
+func (r *mutationResolver) Login(ctx context.Context, input models.LoginInput) (*models.AuthResponse, error) {
 	req := &pb.LoginRequest{
 		Email:    input.Email,
 		Password: input.Password,
@@ -98,7 +99,7 @@ func (r *Resolver) Login(ctx context.Context, input LoginInput) (*AuthResponse, 
 	return convertProtoToGraphQLAuthResponse(resp), nil
 }
 
-func (r *Resolver) VerifyEmail(ctx context.Context, token string) (*AuthResponse, error) {
+func (r *mutationResolver) VerifyEmail(ctx context.Context, token string) (*models.AuthResponse, error) {
 	req := &pb.VerifyEmailRequest{
 		Token: token,
 	}
@@ -131,31 +132,40 @@ func convertProtoToGraphQLUser(protoUser *pb.User) *models.User {
 		return nil
 	}
 
-	// Convert string IDs to ObjectIDs
+	// Convert string ID to ObjectID
 	id, _ := primitive.ObjectIDFromHex(protoUser.Id)
 
-	// Convert cart string IDs to ObjectIDs
-	cart := make([]primitive.ObjectID, len(protoUser.Cart))
-	for i, cartID := range protoUser.Cart {
-		objID, _ := primitive.ObjectIDFromHex(cartID)
-		cart[i] = objID
-	}
+	// Convert cart IDs
+	cart := make([]string, len(protoUser.Cart))
+	copy(cart, protoUser.Cart)
 
-	// Convert address string IDs to ObjectIDs
-	addresses := make([]primitive.ObjectID, len(protoUser.Addresses))
-	for i, addressID := range protoUser.Addresses {
-		objID, _ := primitive.ObjectIDFromHex(addressID)
-		addresses[i] = objID
+	// Convert address IDs
+	addresses := make([]string, len(protoUser.Addresses))
+	copy(addresses, protoUser.Addresses)
+
+	// Handle optional string fields
+	var mobileNumber, gender, dateOfBirth, image *string
+	if protoUser.MobileNumber != "" {
+		mobileNumber = &protoUser.MobileNumber
+	}
+	if protoUser.Gender != "" {
+		gender = &protoUser.Gender
+	}
+	if protoUser.DateOfBirth != "" {
+		dateOfBirth = &protoUser.DateOfBirth
+	}
+	if protoUser.Image != "" {
+		image = &protoUser.Image
 	}
 
 	return &models.User{
-		ID:           id,
+		ID:           id.Hex(), // Convert ObjectID to string
 		Name:         protoUser.Name,
 		Email:        protoUser.Email,
-		MobileNumber: protoUser.MobileNumber,
-		Gender:       protoUser.Gender,
-		DateOfBirth:  protoUser.DateOfBirth,
-		Image:        protoUser.Image,
+		MobileNumber: mobileNumber,
+		Gender:       gender,
+		DateOfBirth:  dateOfBirth,
+		Image:        image,
 		IsVerified:   protoUser.IsVerified,
 		IsAdmin:      protoUser.IsAdmin,
 		Cart:         cart,
@@ -172,10 +182,10 @@ func convertProtoToGraphQLUsers(protoUsers []*pb.User) []*models.User {
 	return users
 }
 
-func convertProtoToGraphQLAuthResponse(protoResp *pb.AuthResponse) *AuthResponse {
-	return &AuthResponse{
+func convertProtoToGraphQLAuthResponse(protoResp *pb.AuthResponse) *models.AuthResponse {
+	return &models.AuthResponse{
 		Message: protoResp.Message,
-		Token:   protoResp.Token,
-		User:    convertProtoToGraphQLUser(protoResp.User),
+		// Token:   protoResp.Token,
+		User: convertProtoToGraphQLUser(protoResp.User),
 	}
 }
