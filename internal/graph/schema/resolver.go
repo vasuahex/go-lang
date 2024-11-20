@@ -5,6 +5,7 @@ package schema
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -49,9 +50,9 @@ func (r *queryResolver) Me(ctx context.Context) (*models.User, error) {
 }
 
 func (r *queryResolver) Users(ctx context.Context) ([]*models.User, error) {
-	// if !isAdmin(ctx) {
-	// 	return nil, errors.New("unauthorized: admin access required")
-	// }
+	if !isAdmin(ctx) {
+		return nil, errors.New("unauthorized: admin access required")
+	}
 
 	users, err := r.AuthService.GetUsers(ctx)
 	if err != nil {
@@ -115,9 +116,12 @@ func (r *mutationResolver) VerifyEmail(ctx context.Context, token string) (*mode
 // Helper functions
 func getUserIDFromContext(ctx context.Context) (string, error) {
 	userID, ok := ctx.Value("userID").(string)
+	fmt.Println(userID)
 	if !ok {
+		fmt.Println("Context does not contain userID")
 		return "", errors.New("unauthorized: no user ID in context")
 	}
+	fmt.Println("Found userID in context:", userID)
 	return userID, nil
 }
 
@@ -183,9 +187,14 @@ func convertProtoToGraphQLUsers(protoUsers []*pb.User) []*models.User {
 }
 
 func convertProtoToGraphQLAuthResponse(protoResp *pb.AuthResponse) *models.AuthResponse {
+	var token *string
+	if protoResp.Token != "" {
+		token = &protoResp.Token
+	}
+
 	return &models.AuthResponse{
 		Message: protoResp.Message,
-		// Token:   protoResp.Token,
-		User: convertProtoToGraphQLUser(protoResp.User),
+		Token:   token,
+		User:    convertProtoToGraphQLUser(protoResp.User),
 	}
 }

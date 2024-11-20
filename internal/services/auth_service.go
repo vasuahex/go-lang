@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -26,15 +27,90 @@ type AuthService struct {
 	userCollection    *mongo.Collection
 	sessionCollection *mongo.Collection
 	emailService      EmailService
+	jwtSecret         []byte
+	revokedTokens     *mongo.Collection
 	pb.UnimplementedAuthServiceServer
 }
 
-func NewAuthService(db *mongo.Database, emailService EmailService) *AuthService {
-	return &AuthService{
+func NewAuthService(db *mongo.Database, emailService EmailService, jwtSecret string) *AuthService {
+	// Start a background goroutine to cleanup expired sessions
+	service := &AuthService{
 		userCollection:    db.Collection("users"),
 		sessionCollection: db.Collection("sessions"),
 		emailService:      emailService,
+		jwtSecret:         []byte(jwtSecret),
+		revokedTokens: db.Collection("revoked_tokens"),
 	}
+
+	// Start periodic cleanup of expired sessions
+	go service.startSessionCleanup()
+
+	return service
+}
+
+// JWT token generation and claims
+type Claims struct {
+	UserID  string `json:"user_id"`
+	IsAdmin bool   `json:"is_admin"`
+	jwt.StandardClaims
+}
+
+func (s *AuthService) generateJWTToken(userID string, isAdmin bool) (string, time.Time, error) {
+	expirationTime := time.Now().Add(24 * time.Hour)
+	claims := &Claims{
+		UserID:  userID,
+		IsAdmin: isAdmin,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+			IssuedAt:  time.Now().Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(s.jwtSecret)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return tokenString, expirationTime, nil
+}
+
+func (s *AuthService) IsTokenRevoked(ctx context.Context, token string) (bool, error) {
+    // Create a simple filter to check if the token exists in the revoked_tokens collection
+    filter := bson.M{"token": token}
+    
+    count, err := s.revokedTokens.CountDocuments(ctx, filter)
+    if err != nil {
+        return false, err
+    }
+    
+    return count > 0, nil
+}
+
+// RevokeToken adds a token to the revoked tokens list
+func (s *AuthService) RevokeToken(ctx context.Context, token string) error {
+    // Add the token to the revoked_tokens collection with a timestamp
+    _, err := s.revokedTokens.InsertOne(ctx, bson.M{
+        "token": token,
+        "revoked_at": time.Now(),
+    })
+    return err
+}
+
+// Session cleanup
+func (s *AuthService) startSessionCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	go func() {
+		for range ticker.C {
+			ctx := context.Background()
+			_, err := s.sessionCollection.DeleteMany(ctx, bson.M{
+				"expires_at": bson.M{"$lt": time.Now()},
+			})
+			if err != nil {
+				fmt.Printf("Error cleaning up expired sessions: %v\n", err)
+			}
+		}
+	}()
 }
 
 // Helper functions
@@ -190,18 +266,17 @@ func (s *AuthService) Login(ctx context.Context, req *pb.LoginRequest) (*pb.Auth
 	}
 
 	// Generate session token
-	sessionToken, err := generateToken(32)
+	token, expiresAt, err := s.generateJWTToken(user.ID.Hex(), user.IsAdmin)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to generate session token")
 	}
 
 	// Create session
-	now := time.Now()
 	session := &models.Session{
 		UserID:    user.ID,
-		Token:     sessionToken,
-		ExpiresAt: now.Add(24 * time.Hour),
-		CreatedAt: now,
+		Token:     token,
+		ExpiresAt: expiresAt,
+		CreatedAt: time.Now(),
 	}
 
 	_, err = s.sessionCollection.InsertOne(ctx, session)
@@ -211,7 +286,7 @@ func (s *AuthService) Login(ctx context.Context, req *pb.LoginRequest) (*pb.Auth
 
 	return &pb.AuthResponse{
 		Message: "Login successful",
-		Token:   sessionToken,
+		Token:   token,
 		User:    s.convertUserToProto(&user),
 	}, nil
 }
