@@ -1,6 +1,6 @@
-# Schema files location
+# Schema files location - this will include all GraphQL schema files
 schema:
-  - internal/graph/schema/*.graphqls
+  - internal/graph/schema/**/*.graphqls
 
 # Generated executable schema
 exec:
@@ -12,12 +12,13 @@ model:
   filename: internal/graph/models/models_gen.go
   package: models
 
-# Resolver configuration
+# Resolver configuration for modular structure
 resolver:
   layout: follow-schema
   dir: internal/graph/schema
   package: schema
-  filename: internal/graph/schema/resolver.go
+  # This will generate a resolver file per schema file
+  filename_template: "{name}.resolver.go"
 
 # Optional: Struct field tags
 struct_tag: json

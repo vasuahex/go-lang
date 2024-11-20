@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -20,11 +21,11 @@ import (
 
 	"github.com/vasuahex/go-lang/internal/models"
 	pb "github.com/vasuahex/go-lang/proto/auth"
-
 )
 
 type AuthService struct {
 	userCollection    *mongo.Collection
+	db                *mongo.Database
 	sessionCollection *mongo.Collection
 	emailService      EmailService
 	jwtSecret         []byte
@@ -35,11 +36,12 @@ type AuthService struct {
 func NewAuthService(db *mongo.Database, emailService EmailService, jwtSecret string) *AuthService {
 	// Start a background goroutine to cleanup expired sessions
 	service := &AuthService{
+		db:                db,
 		userCollection:    db.Collection("users"),
 		sessionCollection: db.Collection("sessions"),
 		emailService:      emailService,
 		jwtSecret:         []byte(jwtSecret),
-		revokedTokens: db.Collection("revoked_tokens"),
+		revokedTokens:     db.Collection("revoked_tokens"),
 	}
 
 	// Start periodic cleanup of expired sessions
@@ -76,25 +78,25 @@ func (s *AuthService) generateJWTToken(userID string, isAdmin bool) (string, tim
 }
 
 func (s *AuthService) IsTokenRevoked(ctx context.Context, token string) (bool, error) {
-    // Create a simple filter to check if the token exists in the revoked_tokens collection
-    filter := bson.M{"token": token}
-    
-    count, err := s.revokedTokens.CountDocuments(ctx, filter)
-    if err != nil {
-        return false, err
-    }
-    
-    return count > 0, nil
+	// Create a simple filter to check if the token exists in the revoked_tokens collection
+	filter := bson.M{"token": token}
+
+	count, err := s.revokedTokens.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
 }
 
 // RevokeToken adds a token to the revoked tokens list
 func (s *AuthService) RevokeToken(ctx context.Context, token string) error {
-    // Add the token to the revoked_tokens collection with a timestamp
-    _, err := s.revokedTokens.InsertOne(ctx, bson.M{
-        "token": token,
-        "revoked_at": time.Now(),
-    })
-    return err
+	// Add the token to the revoked_tokens collection with a timestamp
+	_, err := s.revokedTokens.InsertOne(ctx, bson.M{
+		"token":      token,
+		"revoked_at": time.Now(),
+	})
+	return err
 }
 
 // Session cleanup
@@ -366,4 +368,111 @@ func (s *AuthService) GetUsers(ctx context.Context) ([]*pb.User, error) {
 	}
 
 	return result, nil
+}
+
+func (s *AuthService) VerifySession(ctx context.Context, userID string, token string) (bool, error) {
+	sessionsCollection := s.db.Collection("sessions")
+
+	// Input validation
+	if userID == "" || token == "" {
+		log.Printf("Invalid input - userID: %v, token: %v", userID, token)
+		return false, errors.New("invalid input parameters")
+	}
+
+	// Convert string userID to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		log.Printf("Failed to convert userID to ObjectID - userID: %v, error: %v", userID, err)
+		return false, fmt.Errorf("invalid user ID format: %v", err)
+	}
+
+	// Get current time once to ensure consistency
+	currentTime := time.Now()
+
+	// Create filter
+	filter := bson.M{
+		"user_id":    objectID,
+		"token":      token,
+		"expires_at": bson.M{"$gt": currentTime},
+	}
+
+	// Debug logging for query parameters
+	log.Printf("Verifying session with parameters:")
+	log.Printf("- UserID (string): %v", userID)
+	log.Printf("- UserID (ObjectID): %v", objectID)
+	log.Printf("- Token: %v", token)
+	log.Printf("- Current Time: %v", currentTime)
+	log.Printf("- Filter: %+v", filter)
+
+	// Find the session document
+	var session struct {
+		UserID    primitive.ObjectID `bson:"user_id"`
+		Token     string             `bson:"token"`
+		ExpiresAt time.Time          `bson:"expires_at"`
+		CreatedAt time.Time          `bson:"created_at"`
+	}
+
+	// Execute query with timeout context
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	err = sessionsCollection.FindOne(ctxWithTimeout, filter).Decode(&session)
+
+	// Debug logging for query result
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			log.Printf("No valid session found for userID: %v", userID)
+			return false, nil
+		}
+		log.Printf("Database error while verifying session: %v", err)
+		return false, fmt.Errorf("database error: %v", err)
+	}
+
+	// Log successful session verification
+	log.Printf("Found valid session:")
+	log.Printf("- Session UserID: %v", session.UserID)
+	log.Printf("- Session Token: %v", session.Token)
+	log.Printf("- Session ExpiresAt: %v", session.ExpiresAt)
+	log.Printf("- Session CreatedAt: %v", session.CreatedAt)
+
+	// Additional validation checks
+	if session.UserID != objectID {
+		log.Printf("UserID mismatch - Expected: %v, Found: %v", objectID, session.UserID)
+		return false, nil
+	}
+
+	if session.Token != token {
+		log.Printf("Token mismatch - Expected: %v, Found: %v", token, session.Token)
+		return false, nil
+	}
+
+	if session.ExpiresAt.Before(currentTime) {
+		log.Printf("Session expired - ExpiresAt: %v, CurrentTime: %v", session.ExpiresAt, currentTime)
+		return false, nil
+	}
+
+	// Verify the token hasn't been revoked
+	isRevoked, err := s.IsTokenRevoked(ctx, token)
+	if err != nil {
+		log.Printf("Error checking token revocation: %v", err)
+		return false, fmt.Errorf("error checking token revocation: %v", err)
+	}
+	if isRevoked {
+		log.Printf("Token has been revoked: %v", token)
+		return false, nil
+	}
+
+	// Optional: Update last accessed time
+	_, err = sessionsCollection.UpdateOne(
+		ctx,
+		bson.M{"_id": session.UserID},
+		bson.M{"$set": bson.M{"last_accessed": currentTime}},
+	)
+	if err != nil {
+		log.Printf("Warning: Failed to update last accessed time: %v", err)
+		// Don't return error as this is not critical
+	}
+
+	log.Printf("Session verification successful for userID: %v", userID)
+	return true, nil
 }

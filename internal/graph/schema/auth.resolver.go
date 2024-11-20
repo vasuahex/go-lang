@@ -1,11 +1,10 @@
-// internal/graph/schema/resolvers.go
-
 package schema
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -50,6 +49,7 @@ func (r *queryResolver) Me(ctx context.Context) (*models.User, error) {
 }
 
 func (r *queryResolver) Users(ctx context.Context) ([]*models.User, error) {
+	log.Printf("context: %v", ctx)
 	if !isAdmin(ctx) {
 		return nil, errors.New("unauthorized: admin access required")
 	}

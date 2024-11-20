@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -12,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	// "github.com/golang-jwt/jwt"
@@ -121,106 +126,149 @@ func runGRPCServer(port string, authService *services.AuthService) {
 	}
 }
 
+// ErrorResponse represents a standardized error response structure
+type ErrorResponse struct {
+	Errors []ErrorDetail `json:"errors"`
+}
+
+type ErrorDetail struct {
+	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
+}
+
+// sendJSONError is a helper function to send consistent JSON error responses
+func sendJSONError(w http.ResponseWriter, status int, message string, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	response := ErrorResponse{
+		Errors: []ErrorDetail{
+			{
+				Message: message,
+				Code:    code,
+			},
+		},
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
 // AuthMiddleware handles JWT authentication
 func AuthMiddleware(next http.Handler, jwtSecret string, authService *services.AuthService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+
+		// Disable caching for all GraphQL responses
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+
 		// Skip auth for OPTIONS requests (CORS preflight)
 		if r.Method == "OPTIONS" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Get token from Authorization header
+		// Check if the request is a GraphQL operation
+		if r.URL.Path == "/query" && r.Method == "POST" {
+			bodyBytes, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				sendJSONError(w, http.StatusBadRequest, "Error reading request body", "INVALID_REQUEST")
+				return
+			}
+
+			bodyReader := bytes.NewReader(bodyBytes)
+			var body struct {
+				OperationName *string `json:"operationName"`
+				Query         string  `json:"query"`
+			}
+
+			if err := json.NewDecoder(bodyReader).Decode(&body); err != nil {
+				sendJSONError(w, http.StatusBadRequest, "Invalid JSON in request body", "INVALID_JSON")
+				return
+			}
+
+			r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+
+			// Check if this is a public operation
+			queryLower := strings.ToLower(body.Query)
+			if strings.Contains(queryLower, "mutation register") ||
+				strings.Contains(queryLower, "mutation login") ||
+				strings.Contains(queryLower, "mutation verifyemail") {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// For protected routes, require authentication
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Authorization header is required", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Authorization header is required", "UNAUTHORIZED")
 			return
 		}
 
-		// Extract the token
 		bearerToken := strings.Split(authHeader, " ")
 		if len(bearerToken) != 2 || bearerToken[0] != "Bearer" {
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Invalid authorization header format", "INVALID_AUTH_FORMAT")
 			return
 		}
 		tokenStr := bearerToken[1]
 
 		// Parse and validate the token
 		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
-			// Validate signing method
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			return []byte(jwtSecret), nil
 		})
-		
+
 		if err != nil {
-			// Handle specific JWT validation errors
-			if ve, ok := err.(*jwt.ValidationError); ok {
-				switch {
-				case ve.Errors&jwt.ValidationErrorExpired != 0:
-					http.Error(w, "Token has expired", http.StatusUnauthorized)
-				case ve.Errors&jwt.ValidationErrorSignatureInvalid != 0:
-					http.Error(w, "Invalid token signature", http.StatusUnauthorized)
-				default:
-					http.Error(w, "Invalid token", http.StatusUnauthorized)
-				}
-				return
-			}
-			http.Error(w, "Failed to parse token", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Invalid token", "INVALID_TOKEN")
 			return
 		}
 
 		if !token.Valid {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Invalid token", "INVALID_TOKEN")
 			return
 		}
 
-		// Extract claims and user information
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Invalid token claims", "INVALID_CLAIMS")
 			return
 		}
 
-		// Extract user ID
 		userID, ok := claims["user_id"].(string)
 		if !ok {
-			http.Error(w, "Invalid user ID in token", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "Invalid user ID in token", "INVALID_USER_ID")
 			return
 		}
 
 		// Check token expiration
 		exp, ok := claims["exp"].(float64)
-		if !ok {
-			http.Error(w, "Invalid token expiration", http.StatusUnauthorized)
+		if !ok || time.Now().Unix() > int64(exp) {
+			sendJSONError(w, http.StatusUnauthorized, "Token has expired", "TOKEN_EXPIRED")
 			return
 		}
 
-		if time.Now().Unix() > int64(exp) {
-			http.Error(w, "Token has expired", http.StatusUnauthorized)
-			return
-		}
-
-		// Get user from database to verify if they're still valid
+		// Verify session token in database
 		ctx := r.Context()
+		isValidSession, err := authService.VerifySession(ctx, userID, tokenStr)
+		if err != nil || !isValidSession {
+			sendJSONError(w, http.StatusUnauthorized, "Invalid or expired session", "INVALID_SESSION")
+			return
+		}
+
+		// Get user from database
 		user, err := authService.GetUserByID(ctx, userID)
 		if err != nil {
-			http.Error(w, "User not found", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusUnauthorized, "User not found", "USER_NOT_FOUND")
 			return
 		}
 
-		// Check if user is blocked
 		if user.IsBlocked {
-			http.Error(w, "User is blocked", http.StatusForbidden)
-			return
-		}
-
-		// Optional: Check if token is in a blacklist or revoked
-		// You might want to add a method to check if the token has been revoked in the database
-		isRevoked, err := authService.IsTokenRevoked(ctx, tokenStr)
-		if err != nil || isRevoked {
-			http.Error(w, "Token has been revoked", http.StatusUnauthorized)
+			sendJSONError(w, http.StatusForbidden, "User is blocked", "USER_BLOCKED")
 			return
 		}
 
@@ -229,7 +277,7 @@ func AuthMiddleware(next http.Handler, jwtSecret string, authService *services.A
 		ctx = context.WithValue(ctx, "isAdmin", user.IsAdmin)
 		ctx = context.WithValue(ctx, "user", user)
 
-		// Create new request with updated context
+		// Update request with new context
 		r = r.WithContext(ctx)
 
 		next.ServeHTTP(w, r)
@@ -278,51 +326,70 @@ func runGraphQLServer(port string, authService *services.AuthService, jwtSecret 
 	// Initialize GraphQL resolver
 	resolver := schema.NewResolver(authService)
 
-	// Create GraphQL server with custom error handling
+	// Create GraphQL server with custom error handling and no caching
 	srv := handler.NewDefaultServer(schema.NewExecutableSchema(schema.Config{
 		Resolvers: resolver,
 	}))
 
-	// Configure error handling to ensure proper JSON response
+	// Disable internal caching
+	srv.Use(extension.FixedComplexityLimit(1000))
+
+	// Configure custom error presentation
 	srv.SetErrorPresenter(func(ctx context.Context, e error) *gqlerror.Error {
-		// Log the original error for server-side debugging
+		err := graphql.DefaultErrorPresenter(ctx, e)
 		log.Printf("GraphQL Error: %v", e)
 
-		// Create a GraphQL error with a standard format
+		if strings.Contains(err.Message, "unauthorized") {
+			return &gqlerror.Error{
+				Message: err.Message,
+				Extensions: map[string]interface{}{
+					"code": "UNAUTHORIZED",
+				},
+			}
+		}
+
 		return &gqlerror.Error{
-			Message: "Internal server error",
+			Message: err.Message,
 			Extensions: map[string]interface{}{
 				"code": "INTERNAL_SERVER_ERROR",
 			},
 		}
 	})
 
-	// Setup routes with middleware
+	// Setup router
 	mux := http.NewServeMux()
 
-	// Add GraphQL playground
-	playgroundHandler := playground.Handler("GraphQL playground", "/query")
+	// Setup GraphQL endpoint with middleware
+	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		corsHandler := CORSMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				AuthMiddleware(srv, jwtSecret, authService).ServeHTTP(w, r)
+			})).ServeHTTP(w, r)
+		}))
+
+		corsHandler.ServeHTTP(w, r)
+	})
+
+	// Register the GraphQL endpoint
+	mux.Handle("/query", wrappedHandler)
+
+	// Setup the playground - note that it's at the root path "/"
+	playgroundHandler := playground.Handler("GraphQL Playground", "/query")
 	mux.Handle("/", CORSMiddleware(LoggingMiddleware(playgroundHandler)))
 
-	// Add GraphQL endpoint with all middleware
-	graphqlHandler := CORSMiddleware(
-		LoggingMiddleware(
-			AuthMiddleware(srv, jwtSecret, authService),
-		),
-	)
-	mux.Handle("/query", graphqlHandler)
-
-	// Configure server with more robust error handling
+	// Configure the HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", port),
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
-		ErrorLog:     log.New(os.Stderr, "HTTP Server Error: ", log.Ldate|log.Ltime|log.Lshortfile),
+		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("GraphQL server starting on http://localhost:%s", port)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Failed to serve GraphQL: %v", err)
+	// Start server
+	log.Printf("GraphQL playground is now running on http://localhost:%s", port)
+	log.Printf("GraphQL endpoint is running on http://localhost:%s/query", port)
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
